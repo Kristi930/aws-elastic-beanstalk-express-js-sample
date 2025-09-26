@@ -11,8 +11,7 @@ pipeline {
     DOCKER_HOST = 'tcp://docker:2376'         // must match DinD hostname/TLS certs
     DOCKER_CERT_PATH = '/certs/client'
     DOCKER_TLS_VERIFY = '1'
-    // If you add a "Secret text" credential with ID 'snyk-token', this will be populated.
-    SNYK_TOKEN = credentials('snyk-token')
+    
   }
 
   options {
