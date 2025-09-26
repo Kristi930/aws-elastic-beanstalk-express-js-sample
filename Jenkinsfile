@@ -1,16 +1,18 @@
 // Jenkinsfile for aws-elastic-beanstalk-express-js-sample
-// - Runs build/test inside Node 16 containers
-// - Scans with Snyk (optional, needs snyk-token credential)
-// - Builds/pushes image using DinD (docker-in-docker)
+// - Build & test inside Node 16 containers (assignment requirement)
+// - Optional Snyk scan (runs only if snyk-token exists)
+// - Build & push Docker image via DinD (tcp://docker:2376)
 
 pipeline {
   agent any
 
   environment {
-    IMAGE_NAME = 'kristi123/express-sample'   // Docker Hub repo
-    DOCKER_HOST = 'tcp://dind:2376'
+    IMAGE_NAME = 'kristi123/express-sample'   // <-- your Docker Hub repo
+    DOCKER_HOST = 'tcp://docker:2376'         // must match DinD hostname/TLS certs
     DOCKER_CERT_PATH = '/certs/client'
     DOCKER_TLS_VERIFY = '1'
+    // If you add a "Secret text" credential with ID 'snyk-token', this will be populated.
+    SNYK_TOKEN = credentials('snyk-token')
   }
 
   options {
@@ -25,11 +27,12 @@ pipeline {
         sh '''
           set -e
           if ! command -v docker >/dev/null 2>&1; then
+            echo "[INFO] Installing docker client..."
             apt-get update
-            # Install Docker client
             apt-get install -y --no-install-recommends docker.io
           fi
-          docker --version || true
+          echo "[INFO] Docker version:"; docker --version || true
+          echo "[INFO] Checking DinD:"; docker info >/dev/null 2>&1 || echo "[WARN] docker info failed (DinD may still be coming up)"
         '''
       }
     }
@@ -54,8 +57,8 @@ pipeline {
       }
     }
 
-    stage('Security scan (Snyk)') {
-      environment { SNYK_TOKEN = credentials('snyk-token') }
+    stage('Security scan (Snyk – optional)') {
+      when { expression { return env.SNYK_TOKEN?.trim() } }  // only runs if token exists
       steps {
         sh '''
           docker run --rm -v "$PWD":/work -w /work -e SNYK_TOKEN node:16 bash -lc '
@@ -86,4 +89,3 @@ pipeline {
     }
   }
 }
-
