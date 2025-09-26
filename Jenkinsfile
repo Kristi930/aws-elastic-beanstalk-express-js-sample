@@ -3,11 +3,6 @@ pipeline {
 
   environment {
     IMAGE_NAME = "kristi123/express-sample"
-    DOCKER_CLI_EXPERIMENTAL = "enabled"
-  }
-
-  options {
-    timestamps()
   }
 
   stages {
@@ -33,15 +28,10 @@ pipeline {
       steps {
         sh '''
           set -e
-          # Stream repo into Node container (avoids bind mount issue with DinD)
           tar -C . -cf - . | docker run --rm -i -w /work node:16 bash -lc '
-            mkdir -p /work &&
-            tar -xf - -C /work &&
-            if [ -f /work/package-lock.json ]; then
-              npm ci
-            else
-              npm install
-            fi
+            mkdir -p /work
+            tar -xf - -C /work
+            if [ -f /work/package-lock.json ]; then npm ci; else npm install; fi
           '
         '''
       }
@@ -52,29 +42,33 @@ pipeline {
         sh '''
           set -e
           tar -C . -cf - . | docker run --rm -i -w /work node:16 bash -lc '
-            mkdir -p /work &&
-            tar -xf - -C /work &&
-            npm test || echo "no-tests"
+            mkdir -p /work
+            tar -xf - -C /work
+            if [ -f /work/package-lock.json ]; then npm ci; else npm install; fi
+            npm test
           '
         '''
       }
     }
 
-    // Optional: add back later when stable
-    /*
-    stage('Security scan (Snyk – optional)') {
+    stage('Security scan (Snyk)') {
+      environment { SNYK_TOKEN = credentials('snyk-token') }
       steps {
         sh '''
           set -e
-          echo "[INFO] Skipping Snyk for now (reenable later)"
+          tar -C . -cf - . | docker run --rm -i -e SNYK_TOKEN -w /work node:16 bash -lc '
+            mkdir -p /work
+            tar -xf - -C /work
+            if [ -f /work/package-lock.json ]; then npm ci; else npm install; fi
+            npx --yes snyk@latest test --severity-threshold=high
+          '
         '''
       }
     }
-    */
 
     stage('Docker build & push (DinD)') {
       steps {
-        withDockerRegistry([credentialsId: 'docker-hub-creds', url: '']) {
+        withDockerRegistry([ credentialsId: 'docker-hub-creds', url: '' ]) {
           sh '''
             set -e
             docker build -t $IMAGE_NAME:$BUILD_NUMBER .
@@ -87,7 +81,8 @@ pipeline {
 
   post {
     always {
-      archiveArtifacts artifacts: '**/Dockerfile', fingerprint: true
+      archiveArtifacts artifacts: '**/target/*.jar', allowEmptyArchive: true
+      fingerprint '**/target/*.jar'
     }
   }
 }
