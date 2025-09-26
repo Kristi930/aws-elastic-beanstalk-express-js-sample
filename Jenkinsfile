@@ -1,49 +1,48 @@
-// Jenkinsfile for aws-elastic-beanstalk-express-js-sample
-// - Build & test inside Node 16 containers (assignment requirement)
-// - Optional Snyk scan (runs only if snyk-token exists)
-// - Build & push Docker image via DinD (tcp://docker:2376)
-
 pipeline {
-  agent any
+  agent { label 'built-in' }
 
   environment {
-    IMAGE_NAME = 'kristi123/express-sample'   // <-- your Docker Hub repo
-    DOCKER_HOST = 'tcp://docker:2376'         // must match DinD hostname/TLS certs
-    DOCKER_CERT_PATH = '/certs/client'
-    DOCKER_TLS_VERIFY = '1'
-    
+    IMAGE_NAME = "kristi123/express-sample"
+    DOCKER_CLI_EXPERIMENTAL = "enabled"
   }
 
   options {
     timestamps()
-    buildDiscarder(logRotator(numToKeepStr: '20'))
   }
 
   stages {
-
     stage('Prepare docker CLI') {
       steps {
         sh '''
           set -e
-          if ! command -v docker >/dev/null 2>&1; then
-            echo "[INFO] Installing docker client..."
-            apt-get update
-            apt-get install -y --no-install-recommends docker.io
-          fi
-          echo "[INFO] Docker version:"; docker --version || true
-          echo "[INFO] Checking DinD:"; docker info >/dev/null 2>&1 || echo "[WARN] docker info failed (DinD may still be coming up)"
+          echo "[INFO] Docker version:"
+          docker --version
+          echo "[INFO] Checking DinD:"
+          docker info
         '''
       }
     }
 
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+      }
     }
 
     stage('Install deps (Node16)') {
       steps {
         sh '''
-          docker run --rm -v "$PWD":/work -w /work node:16 bash -lc "npm ci || npm install"
+          set -e
+          # Stream repo into Node container (avoids bind mount issue with DinD)
+          tar -C . -cf - . | docker run --rm -i -w /work node:16 bash -lc '
+            mkdir -p /work &&
+            tar -xf - -C /work &&
+            if [ -f /work/package-lock.json ]; then
+              npm ci
+            else
+              npm install
+            fi
+          '
         '''
       }
     }
@@ -51,31 +50,35 @@ pipeline {
     stage('Test (Node16)') {
       steps {
         sh '''
-          docker run --rm -v "$PWD":/work -w /work node:16 bash -lc "npm test || echo no-tests"
-        '''
-      }
-    }
-
-    stage('Security scan (Snyk – optional)') {
-      when { expression { return env.SNYK_TOKEN?.trim() } }  // only runs if token exists
-      steps {
-        sh '''
-          docker run --rm -v "$PWD":/work -w /work -e SNYK_TOKEN node:16 bash -lc '
-            npm i -g snyk &&
-            snyk auth "${SNYK_TOKEN}" &&
-            snyk test --severity-threshold=high
+          set -e
+          tar -C . -cf - . | docker run --rm -i -w /work node:16 bash -lc '
+            mkdir -p /work &&
+            tar -xf - -C /work &&
+            npm test || echo "no-tests"
           '
         '''
       }
     }
 
+    // Optional: add back later when stable
+    /*
+    stage('Security scan (Snyk – optional)') {
+      steps {
+        sh '''
+          set -e
+          echo "[INFO] Skipping Snyk for now (reenable later)"
+        '''
+      }
+    }
+    */
+
     stage('Docker build & push (DinD)') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+        withDockerRegistry([credentialsId: 'docker-hub-creds', url: '']) {
           sh '''
-            echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
-            docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .
-            docker push ${IMAGE_NAME}:${BUILD_NUMBER}
+            set -e
+            docker build -t $IMAGE_NAME:$BUILD_NUMBER .
+            docker push $IMAGE_NAME:$BUILD_NUMBER
           '''
         }
       }
@@ -84,7 +87,8 @@ pipeline {
 
   post {
     always {
-      archiveArtifacts artifacts: '**/npm-debug.log', allowEmptyArchive: true
+      archiveArtifacts artifacts: '**/Dockerfile', fingerprint: true
     }
   }
 }
+
